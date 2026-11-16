@@ -1,0 +1,32 @@
+# Maintainer: claudemods
+pkgname=claude-coreutils
+pkgver=2.0.0
+pkgrel=1
+pkgdesc='Multi-call coreutils-compatible toolbox for Arch Linux and CachyOS (reflink, btrfs, logind aware)'
+arch=('x86_64' 'x86_64_v3' 'aarch64')
+url='https://github.com/claudemods'
+license=('GPL-3.0-or-later')
+depends=('openssl' 'gcc-libs' 'glibc')
+makedepends=('cmake')
+source=()
+
+build() {
+  # CachyOS: set CU_MARCH=x86-64-v3 (or v4) to match the repo you target; empty = generic x86-64
+  cmake -S "$startdir/.." -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCU_LTO=ON \
+    -DCU_MARCH="${CU_MARCH:-}"
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  # Opt-in links under /usr/lib/claude-coreutils/bin; prepend that directory to PATH to use them.
+  install -d "$pkgdir/usr/lib/claude-coreutils/bin"
+  "$pkgdir/usr/bin/claude-coreutils" --install "$pkgdir/usr/lib/claude-coreutils/bin" --force
+  # make the links relative to the final path
+  for l in "$pkgdir"/usr/lib/claude-coreutils/bin/*; do
+    ln -sfn /usr/bin/claude-coreutils "$l"
+  done
+}

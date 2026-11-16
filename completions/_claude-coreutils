@@ -1,0 +1,4 @@
+#compdef claude-coreutils
+local -a cmds
+cmds=(${(f)"$(claude-coreutils --list 2>/dev/null | awk '{print $1}')"})
+_arguments '1:command:(${cmds} --list --install --uninstall --completions --arch-info --help --version)' '*:file:_files'
