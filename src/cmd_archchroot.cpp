@@ -226,6 +226,7 @@ bool has_pkg(const std::string &root, const std::string &name)
 bool create_root(const std::string &dir)
 {
     say("Creating a new Arch system in " + dir + " (pacstrap -K base openssl)");
+    if (!mkdir_p(dir)) { err_errno("cannot create " + dir); return false; }   // pacstrap needs it to exist
     flush_out();
     const pid_t pid = ::fork();
     if (pid < 0) { err_errno("fork"); return false; }
