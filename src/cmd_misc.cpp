@@ -321,10 +321,23 @@ int cmd_stdbuf(int argc, char **argv)
     if (!out_m.empty()) setenv("_STDBUF_O", out_m.c_str(), 1);
     if (!err_m.empty()) setenv("_STDBUF_E", err_m.c_str(), 1);
     // Arch's coreutils package ships the preload shim here
-    static const char *candidates[] = {"/usr/lib/coreutils/libstdbuf.so", "/usr/libexec/coreutils/libstdbuf.so", "/usr/lib64/coreutils/libstdbuf.so"};
+    std::vector<std::string> candidates;
+    {   // our own shim first: next to this binary (build dir) or in ../lib/claude-coreutils (installed)
+        char me[4096];
+        const ssize_t n = readlink("/proc/self/exe", me, sizeof me - 1);
+        if (n > 0) {
+            me[n] = '\0';
+            std::string d = me;
+            d = d.substr(0, d.find_last_of('/'));
+            candidates.push_back(d + "/libstdbuf.so");
+            candidates.push_back(d + "/../lib/claude-coreutils/libstdbuf.so");
+        }
+    }
+    for (const char *p : {"/usr/lib/claude-coreutils/libstdbuf.so", "/usr/lib/coreutils/libstdbuf.so",
+                          "/usr/libexec/coreutils/libstdbuf.so", "/usr/lib64/coreutils/libstdbuf.so"}) candidates.push_back(p);
     std::string lib;
-    for (const char *p : candidates) if (access(p, R_OK) == 0) { lib = p; break; }
-    if (lib.empty()) err("warning: libstdbuf.so not found (install the 'coreutils' package); buffering is unchanged");
+    for (const std::string &p : candidates) if (access(p.c_str(), R_OK) == 0) { lib = p; break; }
+    if (lib.empty()) err("warning: libstdbuf.so not found (build the project: it is built next to claude-coreutils); buffering is unchanged");
     else {
         std::string pre = lib;
         if (const char *old = std::getenv("LD_PRELOAD")) if (*old) pre = std::string(old) + ":" + lib;

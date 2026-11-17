@@ -274,6 +274,31 @@ bool copy_self(const std::string &root)
     return true;
 }
 
+// copy libstdbuf.so (for `stdbuf`) to <root>/usr/lib/coreutils/, where stdbuf looks for it.
+// It sits next to this binary (build dir) or in ../lib/claude-coreutils (installed).
+bool copy_stdbuf_lib(const std::string &root)
+{
+    namespace fs = std::filesystem;
+    char me[PATH_MAX];
+    const ssize_t n = ::readlink("/proc/self/exe", me, sizeof me - 1);
+    if (n < 0) return false;
+    me[n] = '\0';
+    const std::string d = fs::path(me).parent_path().string();
+    std::error_code ec;
+    for (const std::string &src : {d + "/libstdbuf.so", d + "/../lib/claude-coreutils/libstdbuf.so"}) {
+        if (!fs::exists(src, ec)) continue;
+        const std::string dest_dir = root + "/usr/lib/coreutils";
+        if (!mkdir_p(dest_dir)) return false;
+        const std::string tmp = dest_dir + "/.libstdbuf.so.new";
+        fs::copy_file(src, tmp, fs::copy_options::overwrite_existing, ec);
+        if (ec) return false;
+        ::chmod(tmp.c_str(), 0755);
+        fs::rename(tmp, dest_dir + "/libstdbuf.so", ec);
+        return !ec;
+    }
+    return false;
+}
+
 // Install THIS binary as the coreutils of the Arch system in `root`.
 //  1 copy the binary to /usr/bin/claude-coreutils and check that it runs inside the chroot
 //  2 stage one symlink per command in /usr/local/bin (first in PATH: keeps the system working)
@@ -316,6 +341,9 @@ bool install_coreutils(const std::string &root)
         say("GNU coreutils is not installed in the chroot, skipping removal");
     }
 
+    say("Installing libstdbuf.so for stdbuf");
+    if (!copy_stdbuf_lib(root)) err("warning: libstdbuf.so not found next to claude-coreutils (build the project first); stdbuf will not work");
+
     say("Replacing the GNU files in /usr/bin with symlinks to claude-coreutils");
     if (run_in(root, {self_bin, "--install", "/usr/bin", "--force"}) != 0) { err("could not link the commands into /usr/bin"); return false; }
     run_in(root, {self_bin, "--uninstall", "/usr/local/bin"});
@@ -346,9 +374,9 @@ bool ensure_coreutils(const std::string &root)
     const std::string ls = root + "/usr/bin/ls";
     const bool installed = !has_pkg(root, "coreutils") && fs::is_symlink(ls, ec) &&
                            fs::read_symlink(ls, ec) == "/usr/bin/claude-coreutils";
-    if (installed) return copy_self(root);
+    if (installed) { copy_stdbuf_lib(root); return copy_self(root); }
     if (!install_coreutils(root)) return false;
-    say("Done: the chroot now runs claude-coreutils instead of GNU coreutils (stdbuf will not work: it needs the GNU libstdbuf.so)");
+    say("Done: the chroot now runs claude-coreutils instead of GNU coreutils");
     return true;
 }
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(claude-coreutils VERSION 2.0.0 LANGUAGES CXX)
+project(claude-coreutils VERSION 2.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -44,7 +44,14 @@ if(CU_LTO AND CMAKE_BUILD_TYPE STREQUAL "Release")
     set_property(TARGET claude-coreutils PROPERTY INTERPROCEDURAL_OPTIMIZATION ON)
 endif()
 
+# LD_PRELOAD shim for `stdbuf` (what GNU coreutils ships as libexec/coreutils/libstdbuf.so)
+add_library(cu_stdbuf SHARED src/libstdbuf.c)
+set_target_properties(cu_stdbuf PROPERTIES OUTPUT_NAME stdbuf C_VISIBILITY_PRESET hidden POSITION_INDEPENDENT_CODE ON)
+target_compile_options(cu_stdbuf PRIVATE -O2 -Wall -Wextra)
+add_dependencies(claude-coreutils cu_stdbuf)
+
 include(GNUInstallDirs)
+install(TARGETS cu_stdbuf LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/claude-coreutils)
 install(TARGETS claude-coreutils RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES completions/claude-coreutils.fish DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d)
 install(FILES completions/claude-coreutils.bash RENAME claude-coreutils DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions)

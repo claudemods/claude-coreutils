@@ -44,7 +44,7 @@ When a symlink is named `ls`, `cp`, `sha256sum` and so on, the binary behaves as
 | `ls --color`, `dircolors` | Colours for `*.pkg.tar.zst`, `*.pkg.tar.xz` and PKGBUILD files. `dircolors` emits fish syntax when `$SHELL` is fish. |
 | `chroot` | Works as the base for `arch-chroot`-style scripts. Runs `$SHELL` when no command is given. |
 | `claude-chroot` | Sets up `/proc`, `/sys`, `/dev`, `/run`, `/tmp` and `resolv.conf`, then chroots. Mounts are private to the chroot and vanish when it exits. |
-| `stdbuf` | Finds `/usr/lib/coreutils/libstdbuf.so` from the Arch `coreutils` package. |
+| `stdbuf` | Uses its own `libstdbuf.so` (built with the project, same `_STDBUF_I/O/E` contract as GNU's). Found next to the binary, in `../lib/claude-coreutils`, or in `/usr/lib/coreutils`; the chroot install puts it in `/usr/lib/coreutils`. |
 
 ## Extra commands
 
@@ -79,7 +79,8 @@ Here it is after the install, running `fetch` from claude-coreutils inside the c
 
 ![claude-coreutils installed in an Arch chroot, running fetch](docs/fetch-chroot.png)
 
-The host's own coreutils is never touched. `stdbuf` does not work inside the result, because it needs the GNU package's `libstdbuf.so`. 
+The host's own coreutils is never touched. This has not been run as root yet.
+
 ## Commands
 
 Run `claude-coreutils --list` for the full list with descriptions. It covers every GNU coreutils command except the SELinux-only extras, which are implemented through xattrs (`chcon`) or report that SELinux is missing (`runcon`).
