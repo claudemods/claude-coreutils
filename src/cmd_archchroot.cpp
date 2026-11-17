@@ -141,7 +141,7 @@ int cmd_claude_chroot(int argc, char **argv)
     if (!do_mount(root, "devpts", "/dev/pts", "devpts", MS_NOSUID | MS_NOEXEC, "mode=0620,gid=5,newinstance,ptmxmode=0666")) return 1;
     if (!do_mount(root, "shm", "/dev/shm", "tmpfs", NSD, "mode=1777")) return 1;
     if (!do_mount(root, "run", "/run", "tmpfs", NSD, "mode=0755")) return 1;
-    if (!do_mount(root, "tmp", "/tmp", "tmpfs", NSD, "mode=1777,strictatime")) return 1;
+    if (!do_mount(root, "tmp", "/tmp", "tmpfs", NSD | MS_STRICTATIME, "mode=1777")) return 1;
     bind_resolv_conf(root);   // after /run is mounted: the symlink target is usually under /run
 
     // finish with the regular chroot command (user switch, exec)
