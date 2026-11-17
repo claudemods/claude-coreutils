@@ -1,4 +1,4 @@
-// arch-chroot: chroot with /proc /sys /dev /run /tmp and resolv.conf set up, like Arch's arch-install-scripts.
+// claude-chroot: chroot with /proc /sys /dev /run /tmp and resolv.conf set up, like Arch's arch-install-scripts.
 // The mounts live in a private mount namespace (unshare), so they vanish when the last process in the
 // chroot exits: nothing to unmount and nothing left behind on the host if the shell is killed.
 #include <getopt.h>
@@ -98,12 +98,13 @@ void bind_resolv_conf(const std::string &root)
 
 } // namespace
 
-int cmd_arch_chroot(int argc, char **argv)
+int cmd_claude_chroot(int argc, char **argv)
 {
-    if (handle_help_version(argc, argv, "[-u USER[:GROUP]] CHROOT-DIR [COMMAND [ARG]...]",
+    if (handle_help_version(argc, argv, "[-u USER[:GROUP]] [CHROOT-DIR [COMMAND [ARG]...]]",
                             "Enter an Arch Linux chroot with /proc, /sys, /dev, /run, /tmp and resolv.conf set up.\n"
                             "The mounts are private to the chroot and disappear when it exits.\n"
-                            "Runs /bin/bash when no COMMAND is given.")) return 0;
+                            "Runs /bin/bash when no COMMAND is given. Without CHROOT-DIR it behaves like archroot:\n"
+                            "it looks for your Arch root and asks where it is if it cannot find it.")) return 0;
     std::string userspec;
     int c;
     optind = 1;
@@ -111,7 +112,12 @@ int cmd_arch_chroot(int argc, char **argv)
         if (c == 'u') userspec = optarg;
         else { usage_error("invalid option"); return 1; }
     }
-    if (optind >= argc) { usage_error("missing operand: chroot directory"); return 1; }
+    if (optind >= argc) {
+        // no folder given: find it (or ask for it) the way archroot does
+        char name[] = "archroot";
+        char *av[] = {name, nullptr};
+        return cmd_archroot(1, av);
+    }
     if (::geteuid() != 0) { err("must be run as root"); return 1; }
 
     char resolved[PATH_MAX];
@@ -189,12 +195,12 @@ int run_in(const std::string &root, const std::vector<std::string> &cmd)
     const pid_t pid = ::fork();
     if (pid < 0) { err_errno("fork"); return -1; }
     if (pid == 0) {
-        std::vector<std::string> store = {"arch-chroot", root};
+        std::vector<std::string> store = {"claude-chroot", root};
         store.insert(store.end(), cmd.begin(), cmd.end());
         std::vector<char *> av;
         for (std::string &x : store) av.push_back(x.data());
         av.push_back(nullptr);
-        ::_exit(cmd_arch_chroot(static_cast<int>(store.size()), av.data()));
+        ::_exit(cmd_claude_chroot(static_cast<int>(store.size()), av.data()));
     }
     int st = 0;
     if (::waitpid(pid, &st, 0) < 0) return -1;
@@ -339,12 +345,12 @@ int cmd_archroot(int argc, char **argv)
     if (do_install && !install_coreutils(found)) return 1;
     if (do_install) say("Done: the chroot now runs claude-coreutils instead of GNU coreutils (stdbuf will not work: it needs the GNU libstdbuf.so)");
 
-    std::vector<std::string> store = {"arch-chroot", found};
+    std::vector<std::string> store = {"claude-chroot", found};
     for (int i = optind; i < argc; ++i) store.push_back(argv[i]);
     std::vector<char *> av;
     for (std::string &s : store) av.push_back(s.data());
     av.push_back(nullptr);
-    return cmd_arch_chroot(static_cast<int>(store.size()), av.data());
+    return cmd_claude_chroot(static_cast<int>(store.size()), av.data());
 }
 
 } // namespace cu

@@ -3,7 +3,7 @@
 
 #define CU_COMMANDS(X) \
     X("[", lbracket, "evaluate a conditional expression") \
-    X("arch-chroot", arch_chroot, "enter an Arch chroot with /proc /sys /dev /run /tmp and resolv.conf mounted (private mounts)") \
+    X("claude-chroot", claude_chroot, "enter an Arch chroot with /proc /sys /dev /run /tmp and resolv.conf mounted (private mounts)") \
     X("archroot", archroot, "enter your Arch chroot; asks where it is if it cannot be found") \
     X("arch", arch, "print machine architecture (and the CachyOS x86-64 level with --level)") \
     X("b2sum", b2sum, "compute and check BLAKE2b message digests") \
