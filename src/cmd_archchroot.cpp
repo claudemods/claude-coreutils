@@ -6,13 +6,16 @@
 #include <sched.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
+#include <cctype>
 #include <cerrno>
 #include <climits>
 #include <fcntl.h>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -179,18 +182,122 @@ bool ask(const char *prompt, std::string &answer)
     return true;
 }
 
+// run COMMAND inside the chroot (own mount namespace each time) and wait for it
+int run_in(const std::string &root, const std::vector<std::string> &cmd)
+{
+    flush_out();
+    const pid_t pid = ::fork();
+    if (pid < 0) { err_errno("fork"); return -1; }
+    if (pid == 0) {
+        std::vector<std::string> store = {"arch-chroot", root};
+        store.insert(store.end(), cmd.begin(), cmd.end());
+        std::vector<char *> av;
+        for (std::string &x : store) av.push_back(x.data());
+        av.push_back(nullptr);
+        ::_exit(cmd_arch_chroot(static_cast<int>(store.size()), av.data()));
+    }
+    int st = 0;
+    if (::waitpid(pid, &st, 0) < 0) return -1;
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+void say(const std::string &m) { std::fprintf(stderr, "==> %s\n", m.c_str()); }
+
+// is a package installed? (looks for NAME-<digit>... in the chroot's pacman database)
+bool has_pkg(const std::string &root, const std::string &name)
+{
+    std::error_code ec;
+    for (const auto &e : std::filesystem::directory_iterator(root + "/var/lib/pacman/local", ec)) {
+        const std::string n = e.path().filename().string();
+        if (n.size() > name.size() + 1 && n.compare(0, name.size(), name) == 0 && n[name.size()] == '-' &&
+            std::isdigit(static_cast<unsigned char>(n[name.size() + 1])))
+            return true;
+    }
+    return false;
+}
+
+// Install THIS binary as the coreutils of the Arch system in `root`.
+//  1 copy the binary to /usr/bin/claude-coreutils and check that it runs inside the chroot
+//  2 stage one symlink per command in /usr/local/bin (first in PATH: keeps the system working)
+//  3 pin coreutils in pacman.conf (IgnorePkg) and remove the GNU package (pacman -Rdd)
+//  4 link every command in /usr/bin over the GNU files, drop the staging links, verify
+bool install_coreutils(const std::string &root)
+{
+    namespace fs = std::filesystem;
+    const std::string self_bin = "/usr/bin/claude-coreutils";
+    char me[PATH_MAX];
+    const ssize_t n = ::readlink("/proc/self/exe", me, sizeof me - 1);
+    if (n < 0) { err("cannot find my own path"); return false; }
+    me[n] = '\0';
+    if (!fs::exists(root + "/usr/bin/pacman")) { err(root + " has no pacman: create it with pacstrap first"); return false; }
+
+    say("Copying claude-coreutils to " + root + self_bin);
+    std::error_code ec;
+    const std::string tmp = root + "/usr/bin/.claude-coreutils.new";
+    fs::copy_file(me, tmp, fs::copy_options::overwrite_existing, ec);
+    if (ec) { err("cannot copy the binary: " + ec.message()); return false; }
+    ::chmod(tmp.c_str(), 0755);
+    fs::rename(tmp, root + self_bin, ec);
+    if (ec) { err("cannot install the binary: " + ec.message()); return false; }
+
+    say("Checking that it runs inside the chroot");
+    if (run_in(root, {self_bin, "--version"}) != 0) {
+        err("the binary does not run in the chroot (missing libraries such as openssl or gcc-libs?); nothing was removed");
+        return false;
+    }
+
+    say("Staging a symlink per command in /usr/local/bin (first in PATH, keeps the system working during removal)");
+    if (run_in(root, {self_bin, "--install", "/usr/local/bin", "--force"}) != 0) { err("could not create the staging links"); return false; }
+
+    if (has_pkg(root, "coreutils")) {
+        say("Pinning coreutils in pacman.conf so upgrades do not bring it back");
+        std::string conf;
+        const std::string cf = root + "/etc/pacman.conf";
+        if (read_file(cf, conf) && conf.find("IgnorePkg = coreutils") == std::string::npos) {
+            const size_t o = conf.find("[options]");
+            if (o != std::string::npos) {
+                conf.insert(conf.find('\n', o) + 1, "IgnorePkg = coreutils\n");
+                const int fd = ::open(cf.c_str(), O_WRONLY | O_TRUNC);
+                if (fd >= 0) { write_all(fd, conf); ::close(fd); }
+            }
+        }
+        say("Removing the GNU coreutils package (pacman -Rdd: other packages depend on it)");
+        if (run_in(root, {"pacman", "-Rdd", "--noconfirm", "coreutils"}) != 0) { err("pacman could not remove coreutils"); return false; }
+    } else {
+        say("GNU coreutils is not installed in the chroot, skipping removal");
+    }
+
+    say("Replacing the GNU files in /usr/bin with symlinks to claude-coreutils");
+    if (run_in(root, {self_bin, "--install", "/usr/bin", "--force"}) != 0) { err("could not link the commands into /usr/bin"); return false; }
+    run_in(root, {self_bin, "--uninstall", "/usr/local/bin"});
+
+    say("Verifying");
+    bool ok = !has_pkg(root, "coreutils");
+    if (!ok) err("coreutils is still installed");
+    for (const char *cmd : {"ls", "cp", "mv", "rm", "cat", "mkdir", "env", "sha256sum"}) {
+        const std::string l = root + "/usr/bin/" + cmd;
+        if (!fs::is_symlink(l, ec) || fs::read_symlink(l, ec) != self_bin) { err(std::string("/usr/bin/") + cmd + " is not a link to claude-coreutils"); ok = false; }
+    }
+    return ok;
+}
+
 } // namespace
 
 int cmd_archroot(int argc, char **argv)
 {
-    if (handle_help_version(argc, argv, "[-r DIR] [COMMAND [ARG]...]",
+    if (handle_help_version(argc, argv, "[-i] [-r DIR] [COMMAND [ARG]...]",
                             "Enter your Arch chroot. Looks in -r DIR, $ARCH_ROOT, the saved location, then ./arch-root;\n"
-                            "if none is found it asks where the chroot is and offers to remember it.")) return 0;
+                            "if none is found it asks where the chroot is and offers to remember it.\n"
+                            "-i, --install  first install this binary as the chroot's coreutils (replaces the GNU package),\n"
+                            "               then enter the chroot.")) return 0;
     std::string dir;
+    bool do_install = false;
     int c;
     optind = 1;
-    while ((c = getopt(argc, argv, "+r:")) != -1) {
+    static const option lo[] = {{"install", no_argument, nullptr, 'i'}, {"root", required_argument, nullptr, 'r'}, {nullptr, 0, nullptr, 0}};
+    while ((c = getopt_long(argc, argv, "+ir:", lo, nullptr)) != -1) {
         if (c == 'r') dir = optarg;
+        else if (c == 'i') do_install = true;
         else { usage_error("invalid option"); return 1; }
     }
     if (::geteuid() != 0) { err("must be run as root"); return 1; }
@@ -228,6 +335,9 @@ int cmd_archroot(int argc, char **argv)
             }
         }
     }
+
+    if (do_install && !install_coreutils(found)) return 1;
+    if (do_install) say("Done: the chroot now runs claude-coreutils instead of GNU coreutils (stdbuf will not work: it needs the GNU libstdbuf.so)");
 
     std::vector<std::string> store = {"arch-chroot", found};
     for (int i = optind; i < argc; ++i) store.push_back(argv[i]);
