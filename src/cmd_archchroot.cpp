@@ -98,11 +98,20 @@ void bind_resolv_conf(const std::string &root)
 
 } // namespace
 
-int cmd_claude_chroot(int argc, char **argv)
+bool ensure_coreutils(const std::string &root);   // defined below: installs claude-coreutils into an Arch root
+
+// auto_install=false is used by the installer itself to run its own steps inside the chroot:
+// installing from inside an install would recurse forever.
+static int chroot_impl(int argc, char **argv, bool auto_install);
+
+int cmd_claude_chroot(int argc, char **argv) { return chroot_impl(argc, argv, true); }
+
+static int chroot_impl(int argc, char **argv, bool auto_install)
 {
     if (handle_help_version(argc, argv, "[-u USER[:GROUP]] [CHROOT-DIR [COMMAND [ARG]...]]",
                             "Enter an Arch Linux chroot with /proc, /sys, /dev, /run, /tmp and resolv.conf set up.\n"
                             "The mounts are private to the chroot and disappear when it exits.\n"
+                            "The first time, claude-coreutils is installed as the chroot's coreutils (GNU coreutils is removed).\n"
                             "Runs /bin/bash when no COMMAND is given. Without CHROOT-DIR it behaves like archroot:\n"
                             "it looks for your Arch root and asks where it is if it cannot find it.")) return 0;
     std::string userspec;
@@ -114,9 +123,11 @@ int cmd_claude_chroot(int argc, char **argv)
     }
     if (optind >= argc) {
         // no folder given: find it (or ask for it) the way archroot does
-        char name[] = "archroot";
-        char *av[] = {name, nullptr};
-        return cmd_archroot(1, av);
+        std::vector<std::string> store = {"archroot"};
+        std::vector<char *> av;
+        for (std::string &x : store) av.push_back(x.data());
+        av.push_back(nullptr);
+        return cmd_archroot(static_cast<int>(store.size()), av.data());
     }
     if (::geteuid() != 0) { err("must be run as root"); return 1; }
 
@@ -127,6 +138,11 @@ int cmd_claude_chroot(int argc, char **argv)
     }
     const std::string root = resolved;
     ++optind;
+    if (auto_install) {   // before our own mounts: it enters the chroot itself
+        const bool ok = ensure_coreutils(root);
+        ::unsetenv("CLAUDE_COREUTILS_INSTALLING");   // do not leak the guard into the shell we start
+        if (!ok) return 1;
+    }
 
     if (::unshare(CLONE_NEWNS) != 0) { err_errno("cannot create a private mount namespace"); return 1; }
     // stop our mounts reaching the host
@@ -200,7 +216,7 @@ int run_in(const std::string &root, const std::vector<std::string> &cmd)
         std::vector<char *> av;
         for (std::string &x : store) av.push_back(x.data());
         av.push_back(nullptr);
-        ::_exit(cmd_claude_chroot(static_cast<int>(store.size()), av.data()));
+        ::_exit(chroot_impl(static_cast<int>(store.size()), av.data(), false));   // never install from inside the installer
     }
     int st = 0;
     if (::waitpid(pid, &st, 0) < 0) return -1;
@@ -240,6 +256,24 @@ bool create_root(const std::string &dir)
     return looks_like_root(dir);
 }
 
+// copy this binary to <root>/usr/bin/claude-coreutils (atomically)
+bool copy_self(const std::string &root)
+{
+    namespace fs = std::filesystem;
+    char me[PATH_MAX];
+    const ssize_t n = ::readlink("/proc/self/exe", me, sizeof me - 1);
+    if (n < 0) { err("cannot find my own path"); return false; }
+    me[n] = '\0';
+    std::error_code ec;
+    const std::string tmp = root + "/usr/bin/.claude-coreutils.new";
+    fs::copy_file(me, tmp, fs::copy_options::overwrite_existing, ec);
+    if (ec) { err("cannot copy the binary: " + ec.message()); return false; }
+    ::chmod(tmp.c_str(), 0755);
+    fs::rename(tmp, root + "/usr/bin/claude-coreutils", ec);
+    if (ec) { err("cannot install the binary: " + ec.message()); return false; }
+    return true;
+}
+
 // Install THIS binary as the coreutils of the Arch system in `root`.
 //  1 copy the binary to /usr/bin/claude-coreutils and check that it runs inside the chroot
 //  2 stage one symlink per command in /usr/local/bin (first in PATH: keeps the system working)
@@ -249,20 +283,11 @@ bool install_coreutils(const std::string &root)
 {
     namespace fs = std::filesystem;
     const std::string self_bin = "/usr/bin/claude-coreutils";
-    char me[PATH_MAX];
-    const ssize_t n = ::readlink("/proc/self/exe", me, sizeof me - 1);
-    if (n < 0) { err("cannot find my own path"); return false; }
-    me[n] = '\0';
+    std::error_code ec;
     if (!fs::exists(root + "/usr/bin/pacman")) { err(root + " has no pacman: create it with pacstrap first"); return false; }
 
     say("Copying claude-coreutils to " + root + self_bin);
-    std::error_code ec;
-    const std::string tmp = root + "/usr/bin/.claude-coreutils.new";
-    fs::copy_file(me, tmp, fs::copy_options::overwrite_existing, ec);
-    if (ec) { err("cannot copy the binary: " + ec.message()); return false; }
-    ::chmod(tmp.c_str(), 0755);
-    fs::rename(tmp, root + self_bin, ec);
-    if (ec) { err("cannot install the binary: " + ec.message()); return false; }
+    if (!copy_self(root)) return false;
 
     say("Checking that it runs inside the chroot");
     if (run_in(root, {self_bin, "--version"}) != 0) {
@@ -307,21 +332,38 @@ bool install_coreutils(const std::string &root)
 
 } // namespace
 
+// Called every time a chroot is entered. Not an Arch system (no pacman): nothing to do.
+// Already converted: just refresh the binary so a rebuilt claude-coreutils is picked up.
+// Otherwise do the full install (GNU coreutils out, claude-coreutils in).
+bool ensure_coreutils(const std::string &root)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    // safety net: never install from inside an install (children inherit this variable)
+    if (std::getenv("CLAUDE_COREUTILS_INSTALLING")) return true;
+    ::setenv("CLAUDE_COREUTILS_INSTALLING", "1", 1);
+    if (!fs::exists(root + "/usr/bin/pacman", ec)) return true;
+    const std::string ls = root + "/usr/bin/ls";
+    const bool installed = !has_pkg(root, "coreutils") && fs::is_symlink(ls, ec) &&
+                           fs::read_symlink(ls, ec) == "/usr/bin/claude-coreutils";
+    if (installed) return copy_self(root);
+    if (!install_coreutils(root)) return false;
+    say("Done: the chroot now runs claude-coreutils instead of GNU coreutils (stdbuf will not work: it needs the GNU libstdbuf.so)");
+    return true;
+}
+
 int cmd_archroot(int argc, char **argv)
 {
-    if (handle_help_version(argc, argv, "[-i] [-r DIR] [COMMAND [ARG]...]",
+    if (handle_help_version(argc, argv, "[-r DIR] [COMMAND [ARG]...]",
                             "Enter your Arch chroot. Looks in -r DIR, $ARCH_ROOT, the saved location, then ./arch-root;\n"
-                            "if none is found it asks where the chroot is and offers to remember it.\n"
-                            "-i, --install  first install this binary as the chroot's coreutils (replaces the GNU package),\n"
-                            "               then enter the chroot.")) return 0;
+                            "if none is found it offers to create one in the current directory (pacstrap) or asks where it is.\n"
+                            "The first time, claude-coreutils is installed as the chroot's coreutils (GNU coreutils is removed).")) return 0;
     std::string dir;
-    bool do_install = false;
     int c;
     optind = 1;
-    static const option lo[] = {{"install", no_argument, nullptr, 'i'}, {"root", required_argument, nullptr, 'r'}, {nullptr, 0, nullptr, 0}};
-    while ((c = getopt_long(argc, argv, "+ir:", lo, nullptr)) != -1) {
+    static const option lo[] = {{"root", required_argument, nullptr, 'r'}, {nullptr, 0, nullptr, 0}};
+    while ((c = getopt_long(argc, argv, "+r:", lo, nullptr)) != -1) {
         if (c == 'r') dir = optarg;
-        else if (c == 'i') do_install = true;
         else { usage_error("invalid option"); return 1; }
     }
     if (::geteuid() != 0) { err("must be run as root"); return 1; }
@@ -338,7 +380,6 @@ int cmd_archroot(int argc, char **argv)
 
     char cwdbuf[PATH_MAX];
     const std::string cwd = ::getcwd(cwdbuf, sizeof cwdbuf) ? cwdbuf : ".";
-    bool created = false;
 
     if (found.empty()) {
         if (!::isatty(0)) { err("Arch root not found (use -r DIR or set ARCH_ROOT)"); return 1; }
@@ -351,7 +392,6 @@ int cmd_archroot(int argc, char **argv)
         if (yn.empty() || yn[0] == 'y' || yn[0] == 'Y') {
             if (!create_root(target)) return 1;
             found = target;
-            created = true;
         }
         for (int tries = 0; found.empty() && tries < 3; ++tries) {
             std::string ans;
@@ -372,10 +412,6 @@ int cmd_archroot(int argc, char **argv)
             }
         }
     }
-    if (created && !do_install) say("Tip: run with -i to install claude-coreutils as this system's coreutils");
-
-    if (do_install && !install_coreutils(found)) return 1;
-    if (do_install) say("Done: the chroot now runs claude-coreutils instead of GNU coreutils (stdbuf will not work: it needs the GNU libstdbuf.so)");
 
     std::vector<std::string> store = {"claude-chroot", found};
     for (int i = optind; i < argc; ++i) store.push_back(argv[i]);
