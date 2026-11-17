@@ -3,6 +3,8 @@
 
 #define CU_COMMANDS(X) \
     X("[", lbracket, "evaluate a conditional expression") \
+    X("arch-chroot", arch_chroot, "enter an Arch chroot with /proc /sys /dev /run /tmp and resolv.conf mounted (private mounts)") \
+    X("archroot", archroot, "enter your Arch chroot; asks where it is if it cannot be found") \
     X("arch", arch, "print machine architecture (and the CachyOS x86-64 level with --level)") \
     X("b2sum", b2sum, "compute and check BLAKE2b message digests") \
     X("base32", base32, "base32 encode/decode data") \
@@ -33,6 +35,7 @@
     X("expr", expr, "evaluate expressions") \
     X("factor", factor, "factor numbers") \
     X("false", false, "do nothing, unsuccessfully") \
+    X("fetch", fetch, "print a fastfetch-style system summary (OS, CPU, GPU, memory, disk)") \
     X("fmt", fmt, "simple optimal text formatter") \
     X("fold", fold, "wrap each input line to fit in specified width") \
     X("groups", groups, "print the groups a user is in") \

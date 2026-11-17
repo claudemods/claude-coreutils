@@ -20,6 +20,8 @@ add_executable(claude-coreutils
     src/main.cpp
     src/common.cpp
     src/arch.cpp
+    src/cmd_archchroot.cpp
+    src/cmd_fetch.cpp
     src/cmd_files.cpp
     src/cmd_copy.cpp
     src/cmd_misc.cpp

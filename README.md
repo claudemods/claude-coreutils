@@ -1,8 +1,8 @@
 # claude-coreutils
 
-A single multi-call binary (like busybox) that implements all 108 GNU coreutils commands, built for **Arch Linux and CachyOS**.
+A single multi-call binary (like busybox) that implements all 108 GNU coreutils commands plus three extras (`fetch`, `arch-chroot`, `archroot`), built for **Arch Linux and CachyOS**.
 
-> Status: the code was written on a Windows PC without a compiler. It has **not been compiled or run yet**. Build it on your CachyOS machine first and fix any compiler errors it reports.
+> Status: it compiles and links on CachyOS (GCC 16). It has had little runtime testing, so expect bugs. `arch-chroot` and `archroot` have not been run as root yet.
 
 ## Build and install
 
@@ -43,7 +43,27 @@ When a symlink is named `ls`, `cp`, `sha256sum` and so on, the binary behaves as
 | `nproc` | Honours CPU affinity and the cgroup v2 `cpu.max` quota (containers). |
 | `ls --color`, `dircolors` | Colours for `*.pkg.tar.zst`, `*.pkg.tar.xz` and PKGBUILD files. `dircolors` emits fish syntax when `$SHELL` is fish. |
 | `chroot` | Works as the base for `arch-chroot`-style scripts. Runs `$SHELL` when no command is given. |
+| `arch-chroot` | Sets up `/proc`, `/sys`, `/dev`, `/run`, `/tmp` and `resolv.conf`, then chroots. Mounts are private to the chroot and vanish when it exits. |
 | `stdbuf` | Finds `/usr/lib/coreutils/libstdbuf.so` from the Arch `coreutils` package. |
+
+## Extra commands
+
+| Command | What it does |
+|---|---|
+| `fetch` | fastfetch-style summary: OS, kernel, uptime, pacman packages, shell, desktop, terminal, CPU and x86-64 level, GPU, memory, swap, disk. `--no-logo`, `--no-color`. |
+| `arch-chroot [-u USER[:GROUP]] DIR [COMMAND...]` | Enter an Arch chroot (root only). Runs `/bin/bash` when no command is given. |
+| `archroot [-r DIR] [COMMAND...]` | Enters your Arch chroot. Looks in `-r DIR`, `$ARCH_ROOT`, the saved location (`/etc/claude-coreutils/archroot`), then `./arch-root`. If none is found it asks where the folder is and offers to remember it. |
+
+## Build an Arch system in a folder
+
+`setup-arch-root.sh` installs Arch into a folder with `pacstrap`, compiles claude-coreutils inside it, removes GNU coreutils and installs this one in its place:
+
+```bash
+sudo ./setup-arch-root.sh [ROOT_DIR] [MARCH]   # defaults: ./arch-root  x86-64-v3
+sudo claude-coreutils archroot                 # then enter it
+```
+
+It needs `arch-install-scripts` on the host. The host's own coreutils is never touched. `stdbuf` does not work inside the result, because it needs the GNU package's `libstdbuf.so`.
 
 ## Commands
 
