@@ -79,8 +79,7 @@ Here it is after the install, running `fetch` from claude-coreutils inside the c
 
 ![claude-coreutils installed in an Arch chroot, running fetch](docs/fetch-chroot.png)
 
-The host's own coreutils is never touched. This has not been run as root yet.
-
+The host's own coreutils is never touched.
 ## Commands
 
 Run `claude-coreutils --list` for the full list with descriptions. It covers every GNU coreutils command except the SELinux-only extras, which are implemented through xattrs (`chcon`) or report that SELinux is missing (`runcon`).
