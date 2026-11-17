@@ -52,16 +52,15 @@ When a symlink is named `ls`, `cp`, `sha256sum` and so on, the binary behaves as
 |---|---|
 | `fetch` | fastfetch-style summary: OS, kernel, uptime, pacman packages, shell, desktop, terminal, CPU and x86-64 level, GPU, memory, swap, disk. `--no-logo`, `--no-color`. |
 | `claude-chroot [-u USER[:GROUP]] [DIR [COMMAND...]]` | Enter an Arch chroot (root only). Runs `/bin/bash` when no command is given. With no `DIR` it behaves like `archroot`: finds your Arch root or asks where it is. |
-| `archroot [-i] [-r DIR] [COMMAND...]` | Enters your Arch chroot; `-i` first installs this binary as its coreutils (see below). Looks in `-r DIR`, `$ARCH_ROOT`, the saved location (`/etc/claude-coreutils/archroot`), then `./arch-root`. If none is found it asks where the folder is and offers to remember it. |
+| `archroot [-i] [-r DIR] [COMMAND...]` | Enters your Arch chroot; `-i` first installs this binary as its coreutils (see below). Looks in `-r DIR`, `$ARCH_ROOT`, the saved location (`/etc/claude-coreutils/archroot`), then `./arch-root`. If none is found it offers to create a new Arch system in `./arch-root` in the current directory (runs `pacstrap`), or asks where an existing one is, and offers to remember it. |
 
 ## Install it as the coreutils of an Arch system in a folder
 
-`archroot -i` installs the binary you built on the host as the coreutils of an Arch system in a folder, then drops you into that chroot. Only `pacstrap` (from `arch-install-scripts`) is needed from the host, to create the base system. Run this from the project folder:
+`archroot -i` installs the binary you built on the host as the coreutils of an Arch system in a folder, then drops you into that chroot. If the folder does not exist, `archroot` asks to create it in the current directory with `pacstrap -K arch-root base openssl` (`pacstrap` comes from `arch-install-scripts`). Run this from the project folder:
 
 ```bash
-sudo pacstrap -K arch-root base openssl      # a normal Arch system, GNU coreutils included
 cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
-sudo ./build/claude-coreutils archroot -i -r arch-root
+sudo ./build/claude-coreutils archroot -i      # creates ./arch-root if it is missing (asks first), then installs and enters
 ```
 
 What `archroot -i` does, in order (each step prints a `==>` line):

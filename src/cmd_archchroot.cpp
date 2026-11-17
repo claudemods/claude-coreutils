@@ -222,6 +222,23 @@ bool has_pkg(const std::string &root, const std::string &name)
     return false;
 }
 
+// create a new Arch system in `dir` with pacstrap (from arch-install-scripts)
+bool create_root(const std::string &dir)
+{
+    say("Creating a new Arch system in " + dir + " (pacstrap -K base openssl)");
+    flush_out();
+    const pid_t pid = ::fork();
+    if (pid < 0) { err_errno("fork"); return false; }
+    if (pid == 0) {
+        ::execlp("pacstrap", "pacstrap", "-K", dir.c_str(), "base", "openssl", static_cast<char *>(nullptr));
+        std::fprintf(stderr, "archroot: cannot run pacstrap (install arch-install-scripts): %s\n", std::strerror(errno));
+        ::_exit(127);
+    }
+    int st = 0;
+    if (::waitpid(pid, &st, 0) < 0 || !WIFEXITED(st) || WEXITSTATUS(st) != 0) { err("pacstrap failed"); return false; }
+    return looks_like_root(dir);
+}
+
 // Install THIS binary as the coreutils of the Arch system in `root`.
 //  1 copy the binary to /usr/bin/claude-coreutils and check that it runs inside the chroot
 //  2 stage one symlink per command in /usr/local/bin (first in PATH: keeps the system working)
@@ -318,11 +335,24 @@ int cmd_archroot(int argc, char **argv)
     std::string found;
     for (const std::string &d : cand) if (looks_like_root(d)) { found = d; break; }
 
+    char cwdbuf[PATH_MAX];
+    const std::string cwd = ::getcwd(cwdbuf, sizeof cwdbuf) ? cwdbuf : ".";
+    bool created = false;
+
     if (found.empty()) {
-        if (!dir.empty()) { err("'" + dir + "' is not an Arch root (no etc/os-release)"); return 1; }
         if (!::isatty(0)) { err("Arch root not found (use -r DIR or set ARCH_ROOT)"); return 1; }
+        // offer to make the folder: the -r DIR that does not exist yet, or ./arch-root in the current directory
+        std::string target = cwd + "/arch-root";
+        if (!dir.empty()) target = dir[0] == '/' ? dir : cwd + "/" + dir;
         std::fprintf(stderr, "archroot: no Arch root found.\n");
-        for (int tries = 0; tries < 3 && found.empty(); ++tries) {
+        std::string yn;
+        if (!ask(("Create a new Arch system in " + target + "? [Y/n]: ").c_str(), yn)) return 1;
+        if (yn.empty() || yn[0] == 'y' || yn[0] == 'Y') {
+            if (!create_root(target)) return 1;
+            found = target;
+            created = true;
+        }
+        for (int tries = 0; found.empty() && tries < 3; ++tries) {
             std::string ans;
             if (!ask("Where is your Arch root folder? (empty to cancel): ", ans) || ans.empty()) return 1;
             ans = expand_tilde(ans);
@@ -330,8 +360,8 @@ int cmd_archroot(int argc, char **argv)
             else std::fprintf(stderr, "archroot: '%s' is not an Arch root (no etc/os-release).\n", ans.c_str());
         }
         if (found.empty()) return 1;
-        std::string yn;
-        if (ask("Remember this location? [Y/n]: ", yn) && (yn.empty() || yn[0] == 'y' || yn[0] == 'Y')) {
+        std::string rem;
+        if (ask("Remember this location? [Y/n]: ", rem) && (rem.empty() || rem[0] == 'y' || rem[0] == 'Y')) {
             char abs[PATH_MAX];
             const std::string keep = ::realpath(found.c_str(), abs) ? abs : found;
             if (mkdir_p("/etc/claude-coreutils")) {
@@ -341,6 +371,7 @@ int cmd_archroot(int argc, char **argv)
             }
         }
     }
+    if (created && !do_install) say("Tip: run with -i to install claude-coreutils as this system's coreutils");
 
     if (do_install && !install_coreutils(found)) return 1;
     if (do_install) say("Done: the chroot now runs claude-coreutils instead of GNU coreutils (stdbuf will not work: it needs the GNU libstdbuf.so)");
